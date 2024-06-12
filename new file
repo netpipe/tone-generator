@@ -1,0 +1,9 @@
+g++ -o tone_generator tone_generator.cpp -lSDL2 -lSDL2_mixer -lm
+
+
+
+g++ -o tone_generator tone_generator.cpp -lOpenAL -lSDL2 -lm
+
+
+
+
