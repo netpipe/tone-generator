@@ -10,6 +10,7 @@
 #include <QWidget>
 #include <QLabel>
 #include <QTimer>
+#include <QKeyEvent>
 
 const int SAMPLE_RATE = 44100;
 const int AMPLITUDE = 32760;
@@ -78,104 +79,140 @@ void stop_wave(ALuint* buffers, ALuint source) {
     }
 }
 
-int main(int argc, char* argv[]) {
-    QApplication app(argc, argv);
+class ToneGeneratorWidget : public QWidget {
+    Q_OBJECT
 
-    // Initialize OpenAL
-    ALCdevice* device = alcOpenDevice(nullptr);
-    if (!device) {
-        std::cerr << "Failed to open audio device." << std::endl;
-        return 1;
+public:
+    ToneGeneratorWidget(QWidget *parent = nullptr) : QWidget(parent), phase(0), currentWave(SINE), playing(false), frequency(440) {
+        QVBoxLayout *layout = new QVBoxLayout();
+        QLabel *label = new QLabel("Frequency (Hz):");
+        frequencyInput = new QLineEdit();
+        frequencyInput->setText(QString::number(440));
+        QPushButton *sineButton = new QPushButton("Play Sine Wave");
+        QPushButton *squareButton = new QPushButton("Play Square Wave");
+        QPushButton *stopButton = new QPushButton("Stop");
+
+        layout->addWidget(label);
+        layout->addWidget(frequencyInput);
+        layout->addWidget(sineButton);
+        layout->addWidget(squareButton);
+        layout->addWidget(stopButton);
+        setLayout(layout);
+
+        // Initialize OpenAL
+        device = alcOpenDevice(nullptr);
+        if (!device) {
+            std::cerr << "Failed to open audio device." << std::endl;
+            return;
+        }
+
+        context = alcCreateContext(device, nullptr);
+        if (!context) {
+            std::cerr << "Failed to create OpenAL context." << std::endl;
+            alcCloseDevice(device);
+            return;
+        }
+        alcMakeContextCurrent(context);
+
+        alGenBuffers(NUM_BUFFERS, buffers);
+        alGenSources(1, &source);
+
+        connect(sineButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onSineButtonClicked);
+        connect(squareButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onSquareButtonClicked);
+        connect(stopButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onStopButtonClicked);
+
+        // Start a timer to update the buffers
+        timer = new QTimer(this);
+        connect(timer, &QTimer::timeout, this, &ToneGeneratorWidget::onTimerTimeout);
+        timer->start(10); // Update every 10 ms
     }
 
-    ALCcontext* context = alcCreateContext(device, nullptr);
-    if (!context) {
-        std::cerr << "Failed to create OpenAL context." << std::endl;
+    ~ToneGeneratorWidget() {
+        stop_wave(buffers, source);
+        alDeleteSources(1, &source);
+        alDeleteBuffers(NUM_BUFFERS, buffers);
+
+        alcMakeContextCurrent(nullptr);
+        alcDestroyContext(context);
         alcCloseDevice(device);
-        return 1;
     }
-    alcMakeContextCurrent(context);
 
-    ALuint buffers[NUM_BUFFERS], source;
-    alGenBuffers(NUM_BUFFERS, buffers);
-    alGenSources(1, &source);
+protected:
+    void keyPressEvent(QKeyEvent *event) override {
+        if (event->key() == Qt::Key_Y) {
+            frequency = 10000;
+            currentWave = SQUARE;
+            if (!playing) {
+                phase = 0; // Reset phase when starting playback
+                play_wave(buffers, source, currentWave, frequency, phase);
+                playing = true;
+            }
+        }
+        QWidget::keyPressEvent(event);
+    }
 
-    // Create the main window
-    QWidget window;
-    window.setWindowTitle("Tone Generator");
-
-    QVBoxLayout *layout = new QVBoxLayout();
-    QLabel *label = new QLabel("Frequency (Hz):");
-    QLineEdit *frequencyInput = new QLineEdit();
-    frequencyInput->setText(QString::number(440));
-    QPushButton *sineButton = new QPushButton("Play Sine Wave");
-    QPushButton *squareButton = new QPushButton("Play Square Wave");
-    QPushButton *stopButton = new QPushButton("Stop");
-
-    layout->addWidget(label);
-    layout->addWidget(frequencyInput);
-    layout->addWidget(sineButton);
-    layout->addWidget(squareButton);
-    layout->addWidget(stopButton);
-    window.setLayout(layout);
-
-    int phase = 0;
-    WaveType currentWave = SINE;
-    bool playing = false;
-    int frequency = 440;
-
-    QObject::connect(frequencyInput, &QLineEdit::textChanged, [&](const QString &text) {
+private slots:
+    void onFrequencyChanged(const QString &text) {
         frequency = text.toInt();
-    });
+    }
 
-    QObject::connect(sineButton, &QPushButton::clicked, [&]() {
+    void onSineButtonClicked() {
+        frequency = frequencyInput->text().toInt(); // Update frequency when button is clicked
         currentWave = SINE;
         if (!playing) {
             phase = 0; // Reset phase when starting playback
             play_wave(buffers, source, currentWave, frequency, phase);
             playing = true;
         }
-    });
+    }
 
-    QObject::connect(squareButton, &QPushButton::clicked, [&]() {
+    void onSquareButtonClicked() {
+        frequency = frequencyInput->text().toInt(); // Update frequency when button is clicked
         currentWave = SQUARE;
         if (!playing) {
             phase = 0; // Reset phase when starting playback
             play_wave(buffers, source, currentWave, frequency, phase);
             playing = true;
         }
-    });
+    }
 
-    QObject::connect(stopButton, &QPushButton::clicked, [&]() {
+    void onStopButtonClicked() {
         if (playing) {
             stop_wave(buffers, source);
             playing = false;
             phase = 0; // Reset phase when stopping playback
         }
-    });
+    }
 
-    window.show();
-
-    // Start a timer to update the buffers
-    QTimer timer;
-    QObject::connect(&timer, &QTimer::timeout, [&]() {
+    void onTimerTimeout() {
         if (playing) {
             update_buffers(buffers, source, currentWave, frequency, phase);
         }
-    });
-    timer.start(10); // Update every 10 ms
+    }
 
-    int result = app.exec();
+private:
+    QLineEdit *frequencyInput;
+    QTimer *timer;
+    int phase;
+    WaveType currentWave;
+    bool playing;
+    int frequency;
 
-    // Cleanup
-    stop_wave(buffers, source);
-    alDeleteSources(1, &source);
-    alDeleteBuffers(NUM_BUFFERS, buffers);
+    ALCdevice *device;
+    ALCcontext *context;
+    ALuint buffers[NUM_BUFFERS], source;
+};
 
-    alcMakeContextCurrent(nullptr);
-    alcDestroyContext(context);
-    alcCloseDevice(device);
+int main(int argc, char* argv[]) {
+    QApplication app(argc, argv);
 
-    return result;
+    ToneGeneratorWidget window;
+    window.setWindowTitle("Tone Generator");
+    window.resize(400, 200);
+    window.show();
+
+    return app.exec();
 }
+
+#include "main.moc"
 
