@@ -13,7 +13,7 @@
 
 const int SAMPLE_RATE = 44100;
 const int AMPLITUDE = 32760;
-const int BUFFER_SIZE = 4096; // Larger buffer size for smoother playback
+const int BUFFER_SIZE = 512; // Smaller buffer size for smoother playback
 const int NUM_BUFFERS = 4; // Number of buffers to queue
 
 enum WaveType { SINE, SQUARE };
@@ -64,6 +64,17 @@ void update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequ
     alGetSourcei(source, AL_SOURCE_STATE, &state);
     if (state != AL_PLAYING) {
         alSourcePlay(source);
+    }
+}
+
+void stop_wave(ALuint* buffers, ALuint source) {
+    alSourceStop(source);
+    ALint queued;
+    alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
+
+    while (queued--) {
+        ALuint buffer;
+        alSourceUnqueueBuffers(source, 1, &buffer);
     }
 }
 
@@ -120,6 +131,7 @@ int main(int argc, char* argv[]) {
     QObject::connect(sineButton, &QPushButton::clicked, [&]() {
         currentWave = SINE;
         if (!playing) {
+            phase = 0; // Reset phase when starting playback
             play_wave(buffers, source, currentWave, frequency, phase);
             playing = true;
         }
@@ -128,6 +140,7 @@ int main(int argc, char* argv[]) {
     QObject::connect(squareButton, &QPushButton::clicked, [&]() {
         currentWave = SQUARE;
         if (!playing) {
+            phase = 0; // Reset phase when starting playback
             play_wave(buffers, source, currentWave, frequency, phase);
             playing = true;
         }
@@ -135,7 +148,7 @@ int main(int argc, char* argv[]) {
 
     QObject::connect(stopButton, &QPushButton::clicked, [&]() {
         if (playing) {
-            alSourceStop(source);
+            stop_wave(buffers, source);
             playing = false;
             phase = 0; // Reset phase when stopping playback
         }
@@ -155,7 +168,7 @@ int main(int argc, char* argv[]) {
     int result = app.exec();
 
     // Cleanup
-    alSourceStop(source);
+    stop_wave(buffers, source);
     alDeleteSources(1, &source);
     alDeleteBuffers(NUM_BUFFERS, buffers);
 
