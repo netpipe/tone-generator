@@ -8,7 +8,7 @@
 #include <SDL2/SDL.h>
 
 const int SAMPLE_RATE = 44100;
-const int FREQUENCY = 440;
+const int FREQUENCY = 9800;
 const int AMPLITUDE = 32760;
 const int BUFFER_SIZE = SAMPLE_RATE / 2; // Larger buffer size for smoother playback
 const int NUM_BUFFERS = 8; // Increase the number of buffers for more continuous playback

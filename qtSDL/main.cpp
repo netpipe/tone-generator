@@ -4,6 +4,7 @@
 #include <QWidget>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_mixer.h>
+#include <iostream>
 
 const int SAMPLE_RATE = 44100;
 const int FREQUENCY = 440;

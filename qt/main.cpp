@@ -1,19 +1,20 @@
 #include <iostream>
 #include <cmath>
 #include <vector>
-#include <QtWidgets/QApplication>
-#include <QtWidgets/QPushButton>
-#include <QtWidgets/QVBoxLayout>
-#include <QtWidgets/QWidget>
 #include <AL/al.h>
 #include <AL/alc.h>
+#include <QApplication>
+#include <QPushButton>
+#include <QVBoxLayout>
+#include <QLineEdit>
+#include <QWidget>
+#include <QLabel>
+#include <QTimer>
 
 const int SAMPLE_RATE = 44100;
-const int FREQUENCY = 440;
 const int AMPLITUDE = 32760;
-const int BUFFER_SIZE = SAMPLE_RATE / 2; // Larger buffer size for smoother playback
-const int NUM_BUFFERS = 8; // Increase the number of buffers for more continuous playback
-
+const int BUFFER_SIZE = 4096; // Larger buffer size for smoother playback
+const int NUM_BUFFERS = 4; // Number of buffers to queue
 
 enum WaveType { SINE, SQUARE };
 
@@ -23,123 +24,16 @@ void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency
         if (waveType == SINE) {
             buffer[i] = static_cast<int16_t>(AMPLITUDE * std::sin(2.0f * M_PI * frequency * time));
         } else if (waveType == SQUARE) {
-        int phase =0;
-                    float period = static_cast<float>(SAMPLE_RATE) / frequency;
+            float period = static_cast<float>(SAMPLE_RATE) / frequency;
             buffer[i] = ((phase + i) % static_cast<int>(period) < (period / 2)) ? AMPLITUDE : -AMPLITUDE;
-       
-            //buffer[i] = (i % (SAMPLE_RATE / frequency) < (SAMPLE_RATE / frequency / 2)) ? AMPLITUDE : -AMPLITUDE;
         }
     }
     phase += length;
 }
 
-class ToneGenerator : public QWidget {
-    Q_OBJECT
-
-public:
-    ToneGenerator(QWidget *parent = nullptr);
-    ~ToneGenerator();
-
-private slots:
-    void startSineWave();
-    void startSquareWave();
-    void togglePlayback();
-
-private:
-    void play_wave(WaveType waveType, int frequency);
-    void update_buffers();
-
-    WaveType currentWave;
-    bool playing;
-    ALuint buffers[NUM_BUFFERS];
-    ALuint source;
-    QTimer *timer;
-};
-
-ToneGenerator::ToneGenerator(QWidget *parent) : QWidget(parent), currentWave(SINE), playing(false) {
-    // Initialize OpenAL
-    ALCdevice* device = alcOpenDevice(nullptr);
-    if (!device) {
-        std::cerr << "Failed to open audio device." << std::endl;
-        exit(1);
-    }
-
-    ALCcontext* context = alcCreateContext(device, nullptr);
-    if (!context) {
-        std::cerr << "Failed to create OpenAL context." << std::endl;
-        alcCloseDevice(device);
-        exit(1);
-    }
-    alcMakeContextCurrent(context);
-
-    alGenBuffers(NUM_BUFFERS, buffers);
-    alGenSources(1, &source);
-
-    // Initialize UI
-    QVBoxLayout *layout = new QVBoxLayout(this);
-    QPushButton *sineButton = new QPushButton("Play Sine Wave", this);
-    QPushButton *squareButton = new QPushButton("Play Square Wave", this);
-    QPushButton *toggleButton = new QPushButton("Toggle Playback", this);
-
-    connect(sineButton, &QPushButton::clicked, this, &ToneGenerator::startSineWave);
-    connect(squareButton, &QPushButton::clicked, this, &ToneGenerator::startSquareWave);
-    connect(toggleButton, &QPushButton::clicked, this, &ToneGenerator::togglePlayback);
-
-    layout->addWidget(sineButton);
-    layout->addWidget(squareButton);
-    layout->addWidget(toggleButton);
-
-    setLayout(layout);
-
-    timer = new QTimer(this);
-    connect(timer, &QTimer::timeout, this, &ToneGenerator::update_buffers);
-}
-
-ToneGenerator::~ToneGenerator() {
-    timer->stop();
-    alSourceStop(source);
-    alDeleteSources(1, &source);
-    alDeleteBuffers(NUM_BUFFERS, buffers);
-
-    ALCcontext *context = alcGetCurrentContext();
-    ALCdevice *device = alcGetContextsDevice(context);
-    alcMakeContextCurrent(nullptr);
-    alcDestroyContext(context);
-    alcCloseDevice(device);
-}
-
-void ToneGenerator::startSineWave() {
-    currentWave = SINE;
-    if (!playing) {
-        play_wave(currentWave, FREQUENCY);
-        playing = true;
-    }
-}
-
-void ToneGenerator::startSquareWave() {
-    currentWave = SQUARE;
-    if (!playing) {
-        play_wave(currentWave, FREQUENCY);
-        playing = true;
-    }
-}
-
-void ToneGenerator::togglePlayback() {
-    if (playing) {
-        alSourceStop(source);
-        playing = false;
-        timer->stop();
-    } else {
-        play_wave(currentWave, FREQUENCY);
-        playing = true;
-        timer->start(10); // Update buffers every 10 ms
-    }
-}
-
-void ToneGenerator::play_wave(WaveType waveType, int frequency) {
+void play_wave(ALuint* buffers, ALuint source, WaveType waveType, int frequency, int& phase) {
     int16_t samples[BUFFER_SIZE];
-    int phase = 0;
-    generate_wave(samples, waveType, BUFFER_SIZE, frequency,phase);
+    generate_wave(samples, waveType, BUFFER_SIZE, frequency, phase);
 
     // Fill buffers with generated samples
     for (int i = 0; i < NUM_BUFFERS; ++i) {
@@ -148,10 +42,9 @@ void ToneGenerator::play_wave(WaveType waveType, int frequency) {
     }
 
     alSourcePlay(source);
-    timer->start(10); // Update buffers every 10 ms
 }
 
-void ToneGenerator::update_buffers() {
+void update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequency, int& phase) {
     ALint processed = 0;
     alGetSourcei(source, AL_BUFFERS_PROCESSED, &processed);
 
@@ -160,7 +53,7 @@ void ToneGenerator::update_buffers() {
         alSourceUnqueueBuffers(source, 1, &buffer);
 
         int16_t samples[BUFFER_SIZE];
-        generate_wave(samples, currentWave, BUFFER_SIZE, FREQUENCY);
+        generate_wave(samples, waveType, BUFFER_SIZE, frequency, phase);
         alBufferData(buffer, AL_FORMAT_MONO16, samples, sizeof(samples), SAMPLE_RATE);
 
         alSourceQueueBuffers(source, 1, &buffer);
@@ -174,15 +67,102 @@ void ToneGenerator::update_buffers() {
     }
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
 
-    ToneGenerator generator;
-    generator.setWindowTitle("Tone Generator");
-    generator.resize(300, 200);
-    generator.show();
+    // Initialize OpenAL
+    ALCdevice* device = alcOpenDevice(nullptr);
+    if (!device) {
+        std::cerr << "Failed to open audio device." << std::endl;
+        return 1;
+    }
 
-    return app.exec();
+    ALCcontext* context = alcCreateContext(device, nullptr);
+    if (!context) {
+        std::cerr << "Failed to create OpenAL context." << std::endl;
+        alcCloseDevice(device);
+        return 1;
+    }
+    alcMakeContextCurrent(context);
+
+    ALuint buffers[NUM_BUFFERS], source;
+    alGenBuffers(NUM_BUFFERS, buffers);
+    alGenSources(1, &source);
+
+    // Create the main window
+    QWidget window;
+    window.setWindowTitle("Tone Generator");
+
+    QVBoxLayout *layout = new QVBoxLayout();
+    QLabel *label = new QLabel("Frequency (Hz):");
+    QLineEdit *frequencyInput = new QLineEdit();
+    frequencyInput->setText(QString::number(440));
+    QPushButton *sineButton = new QPushButton("Play Sine Wave");
+    QPushButton *squareButton = new QPushButton("Play Square Wave");
+    QPushButton *stopButton = new QPushButton("Stop");
+
+    layout->addWidget(label);
+    layout->addWidget(frequencyInput);
+    layout->addWidget(sineButton);
+    layout->addWidget(squareButton);
+    layout->addWidget(stopButton);
+    window.setLayout(layout);
+
+    int phase = 0;
+    WaveType currentWave = SINE;
+    bool playing = false;
+    int frequency = 440;
+
+    QObject::connect(frequencyInput, &QLineEdit::textChanged, [&](const QString &text) {
+        frequency = text.toInt();
+    });
+
+    QObject::connect(sineButton, &QPushButton::clicked, [&]() {
+        currentWave = SINE;
+        if (!playing) {
+            play_wave(buffers, source, currentWave, frequency, phase);
+            playing = true;
+        }
+    });
+
+    QObject::connect(squareButton, &QPushButton::clicked, [&]() {
+        currentWave = SQUARE;
+        if (!playing) {
+            play_wave(buffers, source, currentWave, frequency, phase);
+            playing = true;
+        }
+    });
+
+    QObject::connect(stopButton, &QPushButton::clicked, [&]() {
+        if (playing) {
+            alSourceStop(source);
+            playing = false;
+            phase = 0; // Reset phase when stopping playback
+        }
+    });
+
+    window.show();
+
+    // Start a timer to update the buffers
+    QTimer timer;
+    QObject::connect(&timer, &QTimer::timeout, [&]() {
+        if (playing) {
+            update_buffers(buffers, source, currentWave, frequency, phase);
+        }
+    });
+    timer.start(10); // Update every 10 ms
+
+    int result = app.exec();
+
+    // Cleanup
+    alSourceStop(source);
+    alDeleteSources(1, &source);
+    alDeleteBuffers(NUM_BUFFERS, buffers);
+
+    alcMakeContextCurrent(nullptr);
+    alcDestroyContext(context);
+    alcCloseDevice(device);
+
+    return result;
 }
 
-#include "main.moc"
