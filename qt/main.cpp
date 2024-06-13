@@ -11,8 +11,9 @@
 const int SAMPLE_RATE = 44100;
 const int FREQUENCY = 440;
 const int AMPLITUDE = 32760;
-const int BUFFER_SIZE = SAMPLE_RATE / 10; // Larger buffer size for smoother playback
-const int NUM_BUFFERS = 4; // Number of buffers to queue
+const int BUFFER_SIZE = SAMPLE_RATE / 2; // Larger buffer size for smoother playback
+const int NUM_BUFFERS = 8; // Increase the number of buffers for more continuous playback
+
 
 enum WaveType { SINE, SQUARE };
 
@@ -22,6 +23,7 @@ void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency
         if (waveType == SINE) {
             buffer[i] = static_cast<int16_t>(AMPLITUDE * std::sin(2.0f * M_PI * frequency * time));
         } else if (waveType == SQUARE) {
+        int phase =0;
                     float period = static_cast<float>(SAMPLE_RATE) / frequency;
             buffer[i] = ((phase + i) % static_cast<int>(period) < (period / 2)) ? AMPLITUDE : -AMPLITUDE;
        
