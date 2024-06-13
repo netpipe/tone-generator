@@ -16,15 +16,19 @@ const int NUM_BUFFERS = 4; // Number of buffers to queue
 
 enum WaveType { SINE, SQUARE };
 
-void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency) {
+void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency, int& phase) {
     for (int i = 0; i < length; ++i) {
-        float time = static_cast<float>(i) / SAMPLE_RATE;
+        float time = static_cast<float>(phase + i) / SAMPLE_RATE;
         if (waveType == SINE) {
             buffer[i] = static_cast<int16_t>(AMPLITUDE * std::sin(2.0f * M_PI * frequency * time));
         } else if (waveType == SQUARE) {
-            buffer[i] = (i % (SAMPLE_RATE / frequency) < (SAMPLE_RATE / frequency / 2)) ? AMPLITUDE : -AMPLITUDE;
+                    float period = static_cast<float>(SAMPLE_RATE) / frequency;
+            buffer[i] = ((phase + i) % static_cast<int>(period) < (period / 2)) ? AMPLITUDE : -AMPLITUDE;
+       
+            //buffer[i] = (i % (SAMPLE_RATE / frequency) < (SAMPLE_RATE / frequency / 2)) ? AMPLITUDE : -AMPLITUDE;
         }
     }
+    phase += length;
 }
 
 class ToneGenerator : public QWidget {
@@ -132,7 +136,8 @@ void ToneGenerator::togglePlayback() {
 
 void ToneGenerator::play_wave(WaveType waveType, int frequency) {
     int16_t samples[BUFFER_SIZE];
-    generate_wave(samples, waveType, BUFFER_SIZE, frequency);
+    int phase = 0;
+    generate_wave(samples, waveType, BUFFER_SIZE, frequency,phase);
 
     // Fill buffers with generated samples
     for (int i = 0; i < NUM_BUFFERS; ++i) {

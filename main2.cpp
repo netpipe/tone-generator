@@ -1,6 +1,8 @@
 #include <iostream>
 #include <cmath>
 #include <vector>
+#include <thread>
+#include <atomic>
 #include <AL/al.h>
 #include <AL/alc.h>
 #include <SDL2/SDL.h>
@@ -8,8 +10,8 @@
 const int SAMPLE_RATE = 44100;
 const int FREQUENCY = 440;
 const int AMPLITUDE = 32760;
-const int BUFFER_SIZE = SAMPLE_RATE / 10; // Larger buffer size for smoother playback
-const int NUM_BUFFERS = 4; // Number of buffers to queue
+const int BUFFER_SIZE = SAMPLE_RATE / 2; // Larger buffer size for smoother playback
+const int NUM_BUFFERS = 8; // Increase the number of buffers for more continuous playback
 
 enum WaveType { SINE, SQUARE };
 
@@ -26,7 +28,7 @@ void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency
     phase += length;
 }
 
-void play_wave(ALuint* buffers, ALuint source, WaveType waveType, int frequency) {
+void play_wave(ALuint* buffers, ALuint source, WaveType waveType, int frequency, std::atomic<bool>& playing) {
     int16_t samples[BUFFER_SIZE];
     int phase = 0;
     generate_wave(samples, waveType, BUFFER_SIZE, frequency, phase);
@@ -38,28 +40,29 @@ void play_wave(ALuint* buffers, ALuint source, WaveType waveType, int frequency)
     }
 
     alSourcePlay(source);
-}
 
-void update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequency, int& phase) {
-    ALint processed = 0;
-    alGetSourcei(source, AL_BUFFERS_PROCESSED, &processed);
+    while (playing) {
+        ALint processed = 0;
+        alGetSourcei(source, AL_BUFFERS_PROCESSED, &processed);
 
-    while (processed > 0) {
-        ALuint buffer;
-        alSourceUnqueueBuffers(source, 1, &buffer);
+        while (processed > 0) {
+            ALuint buffer;
+            alSourceUnqueueBuffers(source, 1, &buffer);
 
-        int16_t samples[BUFFER_SIZE];
-        generate_wave(samples, waveType, BUFFER_SIZE, frequency, phase);
-        alBufferData(buffer, AL_FORMAT_MONO16, samples, sizeof(samples), SAMPLE_RATE);
+            generate_wave(samples, waveType, BUFFER_SIZE, frequency, phase);
+            alBufferData(buffer, AL_FORMAT_MONO16, samples, sizeof(samples), SAMPLE_RATE);
 
-        alSourceQueueBuffers(source, 1, &buffer);
-        processed--;
-    }
+            alSourceQueueBuffers(source, 1, &buffer);
+            processed--;
+        }
 
-    ALint state;
-    alGetSourcei(source, AL_SOURCE_STATE, &state);
-    if (state != AL_PLAYING) {
-        alSourcePlay(source);
+        ALint state;
+        alGetSourcei(source, AL_SOURCE_STATE, &state);
+        if (state != AL_PLAYING) {
+            alSourcePlay(source);
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 
@@ -99,8 +102,8 @@ int main(int argc, char* argv[]) {
     bool quit = false;
     SDL_Event e;
     WaveType currentWave = SINE;
-    bool playing = false;
-    int phase = 0;
+    std::atomic<bool> playing(false);
+    std::thread playbackThread;
 
     while (!quit) {
         while (SDL_PollEvent(&e) != 0) {
@@ -111,39 +114,39 @@ int main(int argc, char* argv[]) {
                     case SDLK_s:
                         currentWave = SINE;
                         if (!playing) {
-                            play_wave(buffers, source, currentWave, FREQUENCY);
                             playing = true;
+                            playbackThread = std::thread(play_wave, buffers, source, currentWave, FREQUENCY, std::ref(playing));
                         }
                         break;
                     case SDLK_q:
                         currentWave = SQUARE;
                         if (!playing) {
-                            play_wave(buffers, source, currentWave, FREQUENCY);
                             playing = true;
+                            playbackThread = std::thread(play_wave, buffers, source, currentWave, FREQUENCY, std::ref(playing));
                         }
                         break;
                     case SDLK_SPACE:
                         if (playing) {
-                            alSourceStop(source);
                             playing = false;
+                            playbackThread.join();
+                            alSourceStop(source);
                         } else {
-                            phase = 0; // Reset phase when starting playback
-                            play_wave(buffers, source, currentWave, FREQUENCY);
                             playing = true;
+                            playbackThread = std::thread(play_wave, buffers, source, currentWave, FREQUENCY, std::ref(playing));
                         }
                         break;
                 }
             }
         }
 
-        if (playing) {
-            update_buffers(buffers, source, currentWave, FREQUENCY, phase);
-        }
-
         SDL_Delay(1); // Prevent high CPU usage
     }
 
     // Cleanup
+    if (playing) {
+        playing = false;
+        playbackThread.join();
+    }
     alSourceStop(source);
     alDeleteSources(1, &source);
     alDeleteBuffers(NUM_BUFFERS, buffers);
