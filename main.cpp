@@ -18,7 +18,10 @@ void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency
         if (waveType == SINE) {
             buffer[i] = static_cast<int16_t>(AMPLITUDE * std::sin(2.0f * M_PI * frequency * time));
         } else if (waveType == SQUARE) {
-            buffer[i] = (i % (SAMPLE_RATE / frequency) < (SAMPLE_RATE / frequency / 2)) ? AMPLITUDE : -AMPLITUDE;
+                    float period = static_cast<float>(SAMPLE_RATE) / frequency;
+            buffer[i] = ((phase + i) % static_cast<int>(period) < (period / 2)) ? AMPLITUDE : -AMPLITUDE;
+       
+            //buffer[i] = (i % (SAMPLE_RATE / frequency) < (SAMPLE_RATE / frequency / 2)) ? AMPLITUDE : -AMPLITUDE;
         }
     }
     phase += length;
@@ -118,6 +121,7 @@ int main(int argc, char* argv[]) {
         SDL_RenderFillRect(renderer, &toggleButton);
 
         SDL_RenderPresent(renderer);
+        SDL_Delay(1);
     }
 
     SDL_CloseAudio();

@@ -13,20 +13,23 @@ const int NUM_BUFFERS = 4; // Number of buffers to queue
 
 enum WaveType { SINE, SQUARE };
 
-void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency) {
+void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency, int& phase) {
     for (int i = 0; i < length; ++i) {
-        float time = static_cast<float>(i) / SAMPLE_RATE;
+        float time = static_cast<float>(phase + i) / SAMPLE_RATE;
         if (waveType == SINE) {
             buffer[i] = static_cast<int16_t>(AMPLITUDE * std::sin(2.0f * M_PI * frequency * time));
         } else if (waveType == SQUARE) {
-            buffer[i] = (i % (SAMPLE_RATE / frequency) < (SAMPLE_RATE / frequency / 2)) ? AMPLITUDE : -AMPLITUDE;
+            float period = static_cast<float>(SAMPLE_RATE) / frequency;
+            buffer[i] = ((phase + i) % static_cast<int>(period) < (period / 2)) ? AMPLITUDE : -AMPLITUDE;
         }
     }
+    phase += length;
 }
 
 void play_wave(ALuint* buffers, ALuint source, WaveType waveType, int frequency) {
     int16_t samples[BUFFER_SIZE];
-    generate_wave(samples, waveType, BUFFER_SIZE, frequency);
+    int phase = 0;
+    generate_wave(samples, waveType, BUFFER_SIZE, frequency, phase);
 
     // Fill buffers with generated samples
     for (int i = 0; i < NUM_BUFFERS; ++i) {
@@ -37,7 +40,7 @@ void play_wave(ALuint* buffers, ALuint source, WaveType waveType, int frequency)
     alSourcePlay(source);
 }
 
-void update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequency) {
+void update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequency, int& phase) {
     ALint processed = 0;
     alGetSourcei(source, AL_BUFFERS_PROCESSED, &processed);
 
@@ -46,7 +49,7 @@ void update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequ
         alSourceUnqueueBuffers(source, 1, &buffer);
 
         int16_t samples[BUFFER_SIZE];
-        generate_wave(samples, waveType, BUFFER_SIZE, frequency);
+        generate_wave(samples, waveType, BUFFER_SIZE, frequency, phase);
         alBufferData(buffer, AL_FORMAT_MONO16, samples, sizeof(samples), SAMPLE_RATE);
 
         alSourceQueueBuffers(source, 1, &buffer);
@@ -97,6 +100,7 @@ int main(int argc, char* argv[]) {
     SDL_Event e;
     WaveType currentWave = SINE;
     bool playing = false;
+    int phase = 0;
 
     while (!quit) {
         while (SDL_PollEvent(&e) != 0) {
@@ -123,6 +127,7 @@ int main(int argc, char* argv[]) {
                             alSourceStop(source);
                             playing = false;
                         } else {
+                            phase = 0; // Reset phase when starting playback
                             play_wave(buffers, source, currentWave, FREQUENCY);
                             playing = true;
                         }
@@ -132,7 +137,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (playing) {
-            update_buffers(buffers, source, currentWave, FREQUENCY);
+            update_buffers(buffers, source, currentWave, FREQUENCY, phase);
         }
 
         SDL_Delay(1); // Prevent high CPU usage
