@@ -1,36 +1,202 @@
-#include <iostream>
-#include <cmath>
-#include <vector>
-#include <random>
-#include <AL/al.h>
-#include <AL/alc.h>
 #include <QApplication>
-#include <QPushButton>
-#include <QVBoxLayout>
-#include <QLineEdit>
-#include <QComboBox>
 #include <QWidget>
-#include <QLabel>
+#include <QPushButton>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QVBoxLayout>
 #include <QTimer>
-#include <QKeyEvent>
 #include <QtCharts/QChartView>
 #include <QtCharts/QLineSeries>
-
-// this is a WIP so be careful before using
+#include <AL/al.h>
+#include <AL/alc.h>
+#include <random>
+#include <QLabel>
 
 //QT_CHARTS_USE_NAMESPACE
 
-const int SAMPLE_RATE = 44100;
-const int AMPLITUDE = 32760;
-const int BUFFER_SIZE = 512; // Smaller buffer size for smoother playback
-const int NUM_BUFFERS = 4; // Number of buffers to queue
-
 enum WaveType { SINE, SQUARE, WHITE_NOISE, PINK_NOISE, BINAURAL_BEATS };
 
-void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency, int& phase, int frequency2 = 0) {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(-AMPLITUDE, AMPLITUDE);
+class ToneGeneratorWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    ToneGeneratorWidget(QWidget* parent = nullptr);
+    ~ToneGeneratorWidget();
+
+private slots:
+    void onPlayButtonClicked();
+    void onStopButtonClicked();
+    void onTimerTimeout();
+    void onFrequencyChanged();
+    void onBeatFrequencyChanged();
+    void onWaveTypeChanged(int index);
+    void onPresetFrequencyChanged(int index);
+
+private:
+    void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency, int& phase, int frequency2);
+    void play_wave(ALuint* buffers, ALuint source, WaveType waveType, int frequency, int& phase, int frequency2);
+    void update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequency, int& phase, int frequency2);
+    void stop_wave(ALuint* buffers, ALuint source);
+    void update_chart();
+
+    QPushButton* playButton;
+    QPushButton* stopButton;
+    QComboBox* waveTypeComboBox;
+    QLineEdit* frequencyInput;
+    QLineEdit* beatFrequencyInput;
+    QComboBox* presetFrequenciesComboBox;
+    QTimer* timer;
+    QChartView* chartView;
+    QLineSeries* series;
+
+    WaveType currentWave;
+    bool playing;
+    int frequency;
+    int beatFrequency;
+    int frequency2;
+    int phase;
+
+    ALuint buffers[4];
+    ALuint source;
+    ALCdevice* device;
+    ALCcontext* context;
+
+    static const int SAMPLE_RATE = 44100;
+    static const int AMPLITUDE = 32760;
+    static const int BUFFER_SIZE = SAMPLE_RATE / 2; // Larger buffer size for smoother playback
+};
+
+ToneGeneratorWidget::ToneGeneratorWidget(QWidget* parent)
+    : QWidget(parent), playing(false), frequency(440), beatFrequency(10), frequency2(450), phase(0) {
+    playButton = new QPushButton("Play", this);
+    stopButton = new QPushButton("Stop", this);
+    waveTypeComboBox = new QComboBox(this);
+    frequencyInput = new QLineEdit(this);
+    beatFrequencyInput = new QLineEdit(this);
+    presetFrequenciesComboBox = new QComboBox(this);
+    timer = new QTimer(this);
+    chartView = new QChartView(this);
+    series = new QLineSeries();
+
+    waveTypeComboBox->addItem("Sine", SINE);
+    waveTypeComboBox->addItem("Square", SQUARE);
+    waveTypeComboBox->addItem("White Noise", WHITE_NOISE);
+    waveTypeComboBox->addItem("Pink Noise", PINK_NOISE);
+    waveTypeComboBox->addItem("Binaural Beats", BINAURAL_BEATS);
+
+    QStringList presetFrequencies = {"440 Hz", "1000 Hz", "5000 Hz", "10000 Hz"};
+    for (const auto& freq : presetFrequencies) {
+        presetFrequenciesComboBox->addItem(freq);
+    }
+
+    auto layout = new QVBoxLayout;
+    layout->addWidget(playButton);
+    layout->addWidget(stopButton);
+    layout->addWidget(new QLabel("Wave Type:"));
+    layout->addWidget(waveTypeComboBox);
+    layout->addWidget(new QLabel("Frequency (Hz):"));
+    layout->addWidget(frequencyInput);
+    layout->addWidget(new QLabel("Beat Frequency (Hz):"));
+    layout->addWidget(beatFrequencyInput);
+    layout->addWidget(new QLabel("Preset Frequencies:"));
+    layout->addWidget(presetFrequenciesComboBox);
+    layout->addWidget(chartView);
+
+    setLayout(layout);
+
+    chartView->chart()->addSeries(series);
+    chartView->chart()->createDefaultAxes();
+    chartView->setRenderHint(QPainter::Antialiasing);
+
+    connect(playButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onPlayButtonClicked);
+    connect(stopButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onStopButtonClicked);
+    connect(timer, &QTimer::timeout, this, &ToneGeneratorWidget::onTimerTimeout);
+    connect(frequencyInput, &QLineEdit::editingFinished, this, &ToneGeneratorWidget::onFrequencyChanged);
+    connect(beatFrequencyInput, &QLineEdit::editingFinished, this, &ToneGeneratorWidget::onBeatFrequencyChanged);
+    connect(waveTypeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ToneGeneratorWidget::onWaveTypeChanged);
+    connect(presetFrequenciesComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ToneGeneratorWidget::onPresetFrequencyChanged);
+
+    device = alcOpenDevice(nullptr);
+    context = alcCreateContext(device, nullptr);
+    alcMakeContextCurrent(context);
+
+    alGenBuffers(4, buffers);
+    alGenSources(1, &source);
+}
+
+ToneGeneratorWidget::~ToneGeneratorWidget() {
+    stop_wave(buffers, source);
+
+    alDeleteSources(1, &source);
+    alDeleteBuffers(4, buffers);
+
+    alcMakeContextCurrent(nullptr);
+    alcDestroyContext(context);
+    alcCloseDevice(device);
+}
+
+void ToneGeneratorWidget::onPlayButtonClicked() {
+    frequency = frequencyInput->text().toInt();
+    beatFrequency = beatFrequencyInput->text().toInt();
+    frequency2 = frequency + beatFrequency;
+    currentWave = static_cast<WaveType>(waveTypeComboBox->currentData().toInt());
+
+    if (!playing) {
+        phase = 0;
+        play_wave(buffers, source, currentWave, frequency, phase, frequency2);
+        playing = true;
+        timer->start(10);
+    }
+}
+
+void ToneGeneratorWidget::onStopButtonClicked() {
+    if (playing) {
+        stop_wave(buffers, source);
+        playing = false;
+        timer->stop();
+        phase = 0;
+    }
+}
+
+void ToneGeneratorWidget::onTimerTimeout() {
+    if (playing) {
+        update_buffers(buffers, source, currentWave, frequency, phase, frequency2);
+        update_chart();
+    }
+}
+
+void ToneGeneratorWidget::onFrequencyChanged() {
+    if (playing) {
+        onStopButtonClicked();
+        onPlayButtonClicked();
+    }
+}
+
+void ToneGeneratorWidget::onBeatFrequencyChanged() {
+    if (playing) {
+        onStopButtonClicked();
+        onPlayButtonClicked();
+    }
+}
+
+void ToneGeneratorWidget::onWaveTypeChanged(int index) {
+    if (playing) {
+        onStopButtonClicked();
+        onPlayButtonClicked();
+    }
+}
+
+void ToneGeneratorWidget::onPresetFrequencyChanged(int index) {
+    QString freqText = presetFrequenciesComboBox->currentText();
+    frequency = freqText.split(' ')[0].toInt();
+    frequencyInput->setText(QString::number(frequency));
+    onFrequencyChanged();
+}
+
+void ToneGeneratorWidget::generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency, int& phase, int frequency2) {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_int_distribution<> dis(-AMPLITUDE, AMPLITUDE);
 
     for (int i = 0; i < length; ++i) {
         float time = static_cast<float>(phase + i) / SAMPLE_RATE;
@@ -45,27 +211,23 @@ void generate_wave(int16_t* buffer, WaveType waveType, int length, int frequency
                 buffer[i] = dis(gen);
                 break;
             case PINK_NOISE:
-                // Simple approximation of pink noise (white noise filtered)
-                buffer[i] = (buffer[i - 1] + dis(gen)) / 2;
+                buffer[i] = dis(gen) / 2 + buffer[(i - 1 + length) % length] / 2;
                 break;
             case BINAURAL_BEATS:
-                if (i % 2 == 0) {
-                    buffer[i] = static_cast<int16_t>(AMPLITUDE * std::sin(2.0f * M_PI * frequency * time));
-                } else {
-                    buffer[i] = static_cast<int16_t>(AMPLITUDE * std::sin(2.0f * M_PI * frequency2 * time));
-                }
+                buffer[i] = static_cast<int16_t>(AMPLITUDE * std::sin(2.0f * M_PI * frequency * time));
+                buffer[i] += static_cast<int16_t>(AMPLITUDE * std::sin(2.0f * M_PI * frequency2 * time));
+                buffer[i] /= 2;
                 break;
         }
     }
     phase += length;
 }
 
-void play_wave(ALuint* buffers, ALuint source, WaveType waveType, int frequency, int& phase, int frequency2 = 0) {
+void ToneGeneratorWidget::play_wave(ALuint* buffers, ALuint source, WaveType waveType, int frequency, int& phase, int frequency2) {
     int16_t samples[BUFFER_SIZE];
     generate_wave(samples, waveType, BUFFER_SIZE, frequency, phase, frequency2);
 
-    // Fill buffers with generated samples
-    for (int i = 0; i < NUM_BUFFERS; ++i) {
+    for (int i = 0; i < 4; ++i) {
         alBufferData(buffers[i], AL_FORMAT_MONO16, samples, sizeof(samples), SAMPLE_RATE);
         alSourceQueueBuffers(source, 1, &buffers[i]);
     }
@@ -73,8 +235,8 @@ void play_wave(ALuint* buffers, ALuint source, WaveType waveType, int frequency,
     alSourcePlay(source);
 }
 
-void update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequency, int& phase, int frequency2 = 0) {
-    ALint processed = 0;
+void ToneGeneratorWidget::update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequency, int& phase, int frequency2) {
+    int processed;
     alGetSourcei(source, AL_BUFFERS_PROCESSED, &processed);
 
     while (processed > 0) {
@@ -84,9 +246,9 @@ void update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequ
         int16_t samples[BUFFER_SIZE];
         generate_wave(samples, waveType, BUFFER_SIZE, frequency, phase, frequency2);
         alBufferData(buffer, AL_FORMAT_MONO16, samples, sizeof(samples), SAMPLE_RATE);
-
         alSourceQueueBuffers(source, 1, &buffer);
-        processed--;
+
+        --processed;
     }
 
     ALint state;
@@ -96,8 +258,10 @@ void update_buffers(ALuint* buffers, ALuint source, WaveType waveType, int frequ
     }
 }
 
-void stop_wave(ALuint* buffers, ALuint source) {
+void ToneGeneratorWidget::stop_wave(ALuint* buffers, ALuint source) {
     alSourceStop(source);
+    alSourcei(source, AL_BUFFER, 0);
+
     ALint queued;
     alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
 
@@ -107,226 +271,26 @@ void stop_wave(ALuint* buffers, ALuint source) {
     }
 }
 
-class ToneGeneratorWidget : public QWidget {
-    Q_OBJECT
+void ToneGeneratorWidget::update_chart() {
+    QVector<QPointF> points;
+    float time = 0.0f;
+    float increment = 1.0f / SAMPLE_RATE;
 
-public:
-    ToneGeneratorWidget(QWidget *parent = nullptr) : QWidget(parent), phase(0), currentWave(SINE), playing(false), frequency(440), beatFrequency(10), frequency2(450) {
-        QVBoxLayout *layout = new QVBoxLayout();
-        QLabel *label = new QLabel("Base Frequency (Hz):");
-        frequencyInput = new QLineEdit();
-        frequencyInput->setText(QString::number(440));
-        QLabel *beatLabel = new QLabel("Beat Frequency (Hz):");
-        beatFrequencyInput = new QLineEdit();
-        beatFrequencyInput->setText(QString::number(10));
-        presetFrequencies = new QComboBox();
-        presetFrequencies->addItems({"440", "528", "10000"});
-        QPushButton *sineButton = new QPushButton("Play Sine Wave");
-        QPushButton *squareButton = new QPushButton("Play Square Wave");
-        QPushButton *whiteNoiseButton = new QPushButton("Play White Noise");
-        QPushButton *pinkNoiseButton = new QPushButton("Play Pink Noise");
-        QPushButton *binauralButton = new QPushButton("Play Binaural Beats");
-        QPushButton *stopButton = new QPushButton("Stop");
-
-        layout->addWidget(label);
-        layout->addWidget(frequencyInput);
-        layout->addWidget(beatLabel);
-        layout->addWidget(beatFrequencyInput);
-        layout->addWidget(presetFrequencies);
-        layout->addWidget(sineButton);
-        layout->addWidget(squareButton);
-        layout->addWidget(whiteNoiseButton);
-        layout->addWidget(pinkNoiseButton);
-        layout->addWidget(binauralButton);
-        layout->addWidget(stopButton);
-        setLayout(layout);
-
-        // Chart setup
-        series = new QLineSeries();
-        chart = new QChart();
-        chart->addSeries(series);
-        chart->createDefaultAxes();
-        chart->setTitle("Waveform Visualization");
-
-        chartView = new QChartView(chart);
-        layout->addWidget(chartView);
-
-        // Initialize OpenAL
-        device = alcOpenDevice(nullptr);
-        if (!device) {
-            std::cerr << "Failed to open audio device." << std::endl;
-            return;
-        }
-
-        context = alcCreateContext(device, nullptr);
-        if (!context) {
-            std::cerr << "Failed to create OpenAL context." << std::endl;
-            alcCloseDevice(device);
-            return;
-        }
-        alcMakeContextCurrent(context);
-
-        alGenBuffers(NUM_BUFFERS, buffers);
-        alGenSources(1, &source);
-
-        connect(sineButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onSineButtonClicked);
-        connect(squareButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onSquareButtonClicked);
-        connect(whiteNoiseButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onWhiteNoiseButtonClicked);
-        connect(pinkNoiseButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onPinkNoiseButtonClicked);
-        connect(binauralButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onBinauralButtonClicked);
-        connect(stopButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onStopButtonClicked);
-        connect(presetFrequencies, &QComboBox::currentTextChanged, this, &ToneGeneratorWidget::onPresetFrequencyChanged);
-
-        // Start a timer to update the buffers
-        timer = new QTimer(this);
-        connect(timer, &QTimer::timeout, this, &ToneGeneratorWidget::onTimerTimeout);
-        timer->start(10); // Update every 10 ms
+    for (int i = 0; i < BUFFER_SIZE; ++i) {
+        points.append(QPointF(time, std::sin(2.0f * M_PI * frequency * time)));
+        time += increment;
     }
 
-    ~ToneGeneratorWidget() {
-        stop_wave(buffers, source);
-        alDeleteSources(1, &source);
-        alDeleteBuffers(NUM_BUFFERS, buffers);
-
-        alcMakeContextCurrent(nullptr);
-        alcDestroyContext(context);
-        alcCloseDevice(device);
-    }
-
-protected:
-    void keyPressEvent(QKeyEvent *event) override {
-        if (event->key() == Qt::Key_Y) {
-            frequency = 10000;
-            currentWave = SINE;
-            if (!playing) {
-                phase = 0; // Reset phase when starting playback
-                play_wave(buffers, source, currentWave, frequency, phase);
-                playing = true;
-            }
-        }
-        QWidget::keyPressEvent(event);
-    }
-
-private slots:
-    void onFrequencyChanged(const QString &text) {
-        frequency = text.toInt();
-    }
-
-    void onBeatFrequencyChanged(const QString &text) {
-        beatFrequency = text.toInt();
-        frequency2 = frequency + beatFrequency;
-    }
-
-    void onPresetFrequencyChanged(const QString &text) {
-        frequencyInput->setText(text);
-        frequency = text.toInt();
-    }
-
-    void onSineButtonClicked() {
-        frequency = frequencyInput->text().toInt(); // Update frequency when button is clicked
-        currentWave = SINE;
-        if (!playing) {
-            phase = 0; // Reset phase when starting playback
-            play_wave(buffers, source, currentWave, frequency, phase);
-            playing = true;
-        }
-    }
-
-    void onSquareButtonClicked() {
-        frequency = frequencyInput->text().toInt(); // Update frequency when button is clicked
-        currentWave = SQUARE;
-        if (!playing) {
-            phase = 0; // Reset phase when starting playback
-            play_wave(buffers, source, currentWave, frequency, phase);
-            playing = true;
-        }
-    }
-
-    void onWhiteNoiseButtonClicked() {
-        currentWave = WHITE_NOISE;
-        if (!playing) {
-            phase = 0; // Reset phase when starting playback
-            play_wave(buffers, source, currentWave, frequency, phase);
-            playing = true;
-        }
-    }
-
-    void onPinkNoiseButtonClicked() {
-        currentWave = PINK_NOISE;
-        if (!playing) {
-            phase = 0; // Reset phase when starting playback
-            play_wave(buffers, source, currentWave, frequency, phase);
-            playing = true;
-        }
-    }
-
-    void onBinauralButtonClicked() {
-        frequency = frequencyInput->text().toInt(); // Update frequency when button is clicked
-        frequency2 = frequency + beatFrequency; // Update frequency2 for binaural beats
-        currentWave = BINAURAL_BEATS;
-        if (!playing) {
-            phase = 0; // Reset phase when starting playback
-            play_wave(buffers, source, currentWave, frequency, phase, frequency2);
-            playing = true;
-        }
-    }
-
-    void onStopButtonClicked() {
-        if (playing) {
-            stop_wave(buffers, source);
-            playing = false;
-            phase = 0; // Reset phase when stopping playback
-        }
-    }
-
-    void onTimerTimeout() {
-        if (playing) {
-            update_buffers(buffers, source, currentWave, frequency, phase, frequency2);
-            update_chart(); // Update the chart with the current waveform
-        }
-    }
-
-    void update_chart() {
-        QVector<QPointF> points;
-        int16_t samples[BUFFER_SIZE];
-        generate_wave(samples, currentWave, BUFFER_SIZE, frequency, phase, frequency2);
-        for (int i = 0; i < BUFFER_SIZE; ++i) {
-            points.append(QPointF(i, samples[i]));
-        }
-        series->replace(points);
-    }
-
-private:
-    QLineEdit *frequencyInput;
-    QLineEdit *beatFrequencyInput;
-    QComboBox *presetFrequencies;
-    QTimer *timer;
-    int phase;
-    WaveType currentWave;
-    bool playing;
-    int frequency;
-    int beatFrequency;
-    int frequency2;
-
-    ALCdevice *device;
-    ALCcontext *context;
-    ALuint buffers[NUM_BUFFERS], source;
-
-    QChart *chart;
-    QLineSeries *series;
-    QChartView *chartView;
-};
+    series->replace(points);
+}
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
 
-    ToneGeneratorWidget window;
-    window.setWindowTitle("Advanced Tone Generator");
-    window.resize(600, 400);
-    window.show();
+    ToneGeneratorWidget widget;
+    widget.show();
 
     return app.exec();
 }
 
 #include "main.moc"
-
