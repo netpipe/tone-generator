@@ -11,7 +11,6 @@
 #include <AL/alc.h>
 #include <random>
 #include <QLabel>
-
 //QT_CHARTS_USE_NAMESPACE
 
 enum WaveType { SINE, SQUARE, WHITE_NOISE, PINK_NOISE, BINAURAL_BEATS };
@@ -26,7 +25,8 @@ public:
 private slots:
     void onPlayButtonClicked();
     void onStopButtonClicked();
-    void onTimerTimeout();
+    void onAudioTimerTimeout();
+    void onChartTimerTimeout();
     void onFrequencyChanged();
     void onBeatFrequencyChanged();
     void onWaveTypeChanged(int index);
@@ -45,7 +45,8 @@ private:
     QLineEdit* frequencyInput;
     QLineEdit* beatFrequencyInput;
     QComboBox* presetFrequenciesComboBox;
-    QTimer* timer;
+    QTimer* audioTimer;
+    QTimer* chartTimer;
     QChartView* chartView;
     QLineSeries* series;
 
@@ -74,7 +75,8 @@ ToneGeneratorWidget::ToneGeneratorWidget(QWidget* parent)
     frequencyInput = new QLineEdit(this);
     beatFrequencyInput = new QLineEdit(this);
     presetFrequenciesComboBox = new QComboBox(this);
-    timer = new QTimer(this);
+    audioTimer = new QTimer(this);
+    chartTimer = new QTimer(this);
     chartView = new QChartView(this);
     series = new QLineSeries();
 
@@ -110,7 +112,8 @@ ToneGeneratorWidget::ToneGeneratorWidget(QWidget* parent)
 
     connect(playButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onPlayButtonClicked);
     connect(stopButton, &QPushButton::clicked, this, &ToneGeneratorWidget::onStopButtonClicked);
-    connect(timer, &QTimer::timeout, this, &ToneGeneratorWidget::onTimerTimeout);
+    connect(audioTimer, &QTimer::timeout, this, &ToneGeneratorWidget::onAudioTimerTimeout);
+    connect(chartTimer, &QTimer::timeout, this, &ToneGeneratorWidget::onChartTimerTimeout);
     connect(frequencyInput, &QLineEdit::editingFinished, this, &ToneGeneratorWidget::onFrequencyChanged);
     connect(beatFrequencyInput, &QLineEdit::editingFinished, this, &ToneGeneratorWidget::onBeatFrequencyChanged);
     connect(waveTypeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ToneGeneratorWidget::onWaveTypeChanged);
@@ -145,7 +148,8 @@ void ToneGeneratorWidget::onPlayButtonClicked() {
         phase = 0;
         play_wave(buffers, source, currentWave, frequency, phase, frequency2);
         playing = true;
-        timer->start(10);
+        audioTimer->start(10);
+        chartTimer->start(100); // Update chart every 100 ms
     }
 }
 
@@ -153,14 +157,20 @@ void ToneGeneratorWidget::onStopButtonClicked() {
     if (playing) {
         stop_wave(buffers, source);
         playing = false;
-        timer->stop();
+        audioTimer->stop();
+        chartTimer->stop();
         phase = 0;
     }
 }
 
-void ToneGeneratorWidget::onTimerTimeout() {
+void ToneGeneratorWidget::onAudioTimerTimeout() {
     if (playing) {
         update_buffers(buffers, source, currentWave, frequency, phase, frequency2);
+    }
+}
+
+void ToneGeneratorWidget::onChartTimerTimeout() {
+    if (playing) {
         update_chart();
     }
 }
